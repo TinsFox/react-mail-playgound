@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'fs'
-import { join, relative } from 'path'
+import { join } from 'path'
 
 interface FileEntry {
   file: {
@@ -56,7 +56,7 @@ function generateFiles() {
   const output = `/** @satisfies {import('@webcontainer/api').FileSystemTree} */
 export const files = ${JSON.stringify(fileSystem, null, 2)}`
 
-  writeFileSync(join(projectRoot, 'files.ts'), output)
+  writeFileSync(join(projectRoot, 'src/files.ts'), output)
 }
 
 generateFiles()
