@@ -76,3 +76,16 @@ textarea {
   font-size: 80%;
   text-decoration: underline;
 }
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 20rem;
+  width: 100%;
+  border: solid 2px #ccc;
+  border-radius: 3px;
+  font-size: 1.2rem;
+  color: #666;
+  background: #f5f5f5;
+}

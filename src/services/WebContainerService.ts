@@ -1,19 +1,31 @@
 import { WebContainer } from "@webcontainer/api";
 import { files } from "../files";
 
+interface ServerProcess {
+  kill: () => void;
+  output: {
+    pipeTo: (stream: WritableStream) => Promise<void>;
+  };
+}
+
 export class WebContainerService {
   private static instance: WebContainerService;
   private webcontainer: WebContainer | null = null;
-  private serverProcess: any = null; // 存储服务器进程
+  private serverProcess: ServerProcess | null = null;
   private isDisposing = false;
+  private static isBooted = false;
+  private initializationPromise: Promise<void> | null = null;
 
   private constructor() {
-    // 添加热更新支持
     if (import.meta.hot) {
-      import.meta.hot.dispose(() => {
-        this.dispose();
+      import.meta.hot.dispose(async () => {
+        await this.dispose();
       });
     }
+
+    window.addEventListener('beforeunload', async () => {
+      await this.dispose();
+    });
   }
 
   public static getInstance(): WebContainerService {
@@ -24,13 +36,36 @@ export class WebContainerService {
   }
 
   public async initialize(): Promise<void> {
-    if (this.isDisposing) {
-      await new Promise(resolve => setTimeout(resolve, 100)); // 等待之前的实例清理完成
+    if (this.initializationPromise) {
+      return this.initializationPromise;
     }
 
-    if (!this.webcontainer) {
+    this.initializationPromise = this._initialize();
+    return this.initializationPromise;
+  }
+
+  private async _initialize(): Promise<void> {
+    if (this.isDisposing) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    if (this.webcontainer) {
+      return;
+    }
+
+    if (WebContainerService.isBooted) {
+      throw new Error("WebContainer can only be booted once per page load");
+    }
+
+    try {
       this.webcontainer = await WebContainer.boot();
+      WebContainerService.isBooted = true;
       await this.webcontainer.mount(files);
+    } catch (error) {
+      this.initializationPromise = null;
+      console.error("Failed to boot WebContainer:", error);
+      await this.dispose();
+      throw error;
     }
   }
 
@@ -44,7 +79,6 @@ export class WebContainerService {
       "--registry=https://registry.npmmirror.com",
     ]);
 
-    // 改进输出处理
     const outputStream = new WritableStream({
       write(data) {
         console.log("[WebContainer Install]:", data);
@@ -57,7 +91,7 @@ export class WebContainerService {
       }
     });
 
-    installProcess.output.pipeTo(outputStream);
+    await installProcess.output.pipeTo(outputStream);
     return installProcess.exit;
   }
 
@@ -67,22 +101,25 @@ export class WebContainerService {
     }
 
     try {
-      // 如果存在旧的服务器进程，先关闭它
       if (this.serverProcess) {
+        console.log("[WebContainer Server]: Stopping existing server");
         await this.stopDevServer();
       }
 
+      console.log("[WebContainer Server]: Starting server...");
       this.serverProcess = await this.webcontainer.spawn("npm", ["run", "dev"]);
 
-      // 改进服务器输出处理
       const outputStream = new WritableStream({
         write(data) {
           console.log("[WebContainer Server]:", data);
         }
       });
-      this.serverProcess.output.pipeTo(outputStream);
 
-      // 监听服务器就绪事件
+      this.serverProcess.output.pipeTo(outputStream).catch(error => {
+        console.error("[WebContainer Server]: Output stream error", error);
+      });
+
+      console.log("[WebContainer Server]: Waiting for server to be ready...");
       this.webcontainer.on("server-ready", (port, url) => {
         console.log("[WebContainer Server]: Ready at", url);
         onServerReady(url);
@@ -96,7 +133,7 @@ export class WebContainerService {
   private async stopDevServer(): Promise<void> {
     if (this.serverProcess) {
       try {
-        await this.serverProcess.kill();
+        this.serverProcess.kill();
         this.serverProcess = null;
       } catch (error) {
         console.warn("[WebContainer Server]: Failed to stop server", error);
@@ -108,24 +145,10 @@ export class WebContainerService {
     this.isDisposing = true;
     try {
       if (this.webcontainer) {
-        // 停止开发服务器
         await this.stopDevServer();
-
-        // 清理所有运行的进程
-        const processes = await this.webcontainer.ps();
-        await Promise.all(
-          processes.map(async (process) => {
-            try {
-              await process.kill();
-            } catch (error) {
-              console.warn('[WebContainer]: Failed to kill process', error);
-            }
-          })
-        );
-
-        // 重置实例
         this.webcontainer = null;
-        WebContainerService.instance = null;
+        WebContainerService.isBooted = false;
+        WebContainerService.instance = undefined as unknown as WebContainerService;
       }
     } catch (error) {
       console.error('[WebContainer]: Disposal error', error);
